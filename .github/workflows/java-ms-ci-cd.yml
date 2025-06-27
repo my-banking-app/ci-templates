@@ -63,14 +63,6 @@ jobs:
     outputs:
       analysis-id: ${{ steps.extract-analysis-id.outputs.analysis-id }}
 
-    env:
-      SPRING_DATASOURCE_URL: ${{ secrets.SPRING_DATASOURCE_URL }}
-      DB_NAME: ${{ secrets.DB_NAME }}
-      DB_USER: ${{ secrets.DB_USER }}
-      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      API_KEY: ${{ secrets.API_KEY }}
-      JWT_SECRET: ${{ secrets.JWT_SECRET }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -146,6 +138,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: analyze
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    env:
+      SPRING_DATASOURCE_URL: ${{ secrets.SPRING_DATASOURCE_URL }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      API_KEY: ${{ secrets.API_KEY }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
 
     steps:
       - name: Checkout code

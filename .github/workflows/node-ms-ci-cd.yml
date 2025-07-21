@@ -1,0 +1,151 @@
+name: Reusable Node/NestJS CI/CD
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: 'Display name of the service'
+        required: true
+        type: string
+      docker-image-name:
+        description: 'Docker image name (without registry/user)'
+        required: true
+        type: string
+      service-port:
+        description: 'Port exposed by the service'
+        required: true
+        type: string
+      sonar-project-key:
+        description: 'SonarCloud project key'
+        required: true
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      install-command:
+        description: 'Install dependencies command'
+        required: false
+        default: 'pnpm install --frozen-lockfile'
+        type: string
+      test-command:
+        description: 'Run unit tests with coverage'
+        required: false
+        default: 'pnpm test:cov'
+        type: string
+    secrets:
+      SONAR_TOKEN:           { required: true }
+      DOCKER_USERNAME:       { required: true }
+      DOCKER_PASSWORD:       { required: true }
+      VPS_HOST:              { required: true }
+      VPS_USERNAME:          { required: true }
+      VPS_PRIVATE_KEY:       { required: true }
+      API_KEY:               { required: true }
+      JWT_SECRET:            { required: true }
+      # URLs de MS a los que delega el gateway
+      ACCOUNTS_URL:          { required: true }
+      TRANSACTIONS_URL:      { required: true }
+      PAYMENTS_URL:          { required: true }
+      CARDS_URL:             { required: true }
+      AUTH_URL:              { required: true }
+
+jobs:
+################################################################################
+# 1) Calidad + cobertura en SonarCloud
+################################################################################
+  analyze:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ inputs.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'pnpm'
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@^9 --activate
+
+      - name: Install deps
+        run: ${{ inputs.install-command }}
+
+      - name: Run tests with coverage
+        run: ${{ inputs.test-command }}
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: .
+          args: >
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.projectKey=${{ inputs.sonar-project-key }}
+
+################################################################################
+# 2) Build imagen y despliegue en el VPS
+################################################################################
+  deploy:
+    name: Deploy → VPS
+    needs: analyze
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    env:
+      API_KEY:      ${{ secrets.API_KEY }}
+      JWT_SECRET:   ${{ secrets.JWT_SECRET }}
+      ACCOUNTS_URL: ${{ secrets.ACCOUNTS_URL }}
+      TRANSACTIONS_URL: ${{ secrets.TRANSACTIONS_URL }}
+      PAYMENTS_URL: ${{ secrets.PAYMENTS_URL }}
+      CARDS_URL: ${{ secrets.CARDS_URL }}
+      AUTH_URL: ${{ secrets.AUTH_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build & push image
+        run: |
+          echo "🐳 Building ${{ inputs.docker-image-name }}:prod"
+          docker buildx build \
+            --push \
+            --tag ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod .
+
+      - name: Deploy on VPS via SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_PRIVATE_KEY }}
+          script: |
+            echo "🚀 Deploying ${{ inputs.service-name }}..."
+            docker pull ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
+
+            docker stop ${{ inputs.docker-image-name }}-prod || true
+            docker rm   ${{ inputs.docker-image-name }}-prod || true
+
+            docker run -d --restart=unless-stopped --name ${{ inputs.docker-image-name }}-prod \
+              -p ${{ inputs.service-port }}:${{ inputs.service-port }} \
+              --network banking-net \
+              -e PORT=${{ inputs.service-port }} \
+              -e API_KEY=$API_KEY \
+              -e JWT_SECRET=$JWT_SECRET \
+              -e ACCOUNTS_URL=$ACCOUNTS_URL \
+              -e TRANSACTIONS_URL=$TRANSACTIONS_URL \
+              -e PAYMENTS_URL=$PAYMENTS_URL \
+              -e CARDS_URL=$CARDS_URL \
+              -e AUTH_URL=$AUTH_URL \
+              ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
+
+            echo "✅ ${{ inputs.service-name }} deployed!"

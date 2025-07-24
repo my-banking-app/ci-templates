@@ -107,6 +107,7 @@ jobs:
           projectBaseDir: .
           args: >
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.qualitygate.wait=true
 
       - name: SonarCloud Scan (Feature Branch)
         if: github.ref != 'refs/heads/main'
@@ -118,6 +119,7 @@ jobs:
           args: >
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.branch.name=${{ github.ref_name }}
+            -Dsonar.qualitygate.wait=true
 
 ################################################################################
 # 2) Build imagen y despliegue en el VPS

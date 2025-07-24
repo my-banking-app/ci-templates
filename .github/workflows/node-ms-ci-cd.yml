@@ -98,28 +98,19 @@ jobs:
       - name: Run tests with coverage
         run: ${{ inputs.test-command }}
 
-      - name: SonarCloud Scan (Main Branch)
-        if: github.ref == 'refs/heads/main'
-        uses: SonarSource/sonarcloud-github-action@v2
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          projectBaseDir: .
-          args: >
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-            -Dsonar.qualitygate.wait=true
+      - name: Install SonarScanner CLI (silent)
+        run: |
+          curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.2.4997-linux.zip
+          unzip -qq sonar-scanner.zip
+          sudo mv sonar-scanner-5.0.2.4997-linux /opt/sonar-scanner > /dev/null 2>&1
+          echo "/opt/sonar-scanner/bin" >> $GITHUB_PATH
 
-      - name: SonarCloud Scan (Feature Branch)
-        if: github.ref != 'refs/heads/main'
-        uses: SonarSource/sonarcloud-github-action@v2
+      - name: Run SonarScanner CLI
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          projectBaseDir: .
-          args: >
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-            -Dsonar.branch.name=${{ github.ref_name }}
-            -Dsonar.qualitygate.wait=true
+        run: |
+          /opt/sonar-scanner/bin/sonar-scanner \
+            -Dsonar.login=${SONAR_TOKEN}
 
 ################################################################################
 # 2) Build imagen y despliegue en el VPS

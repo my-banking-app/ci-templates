@@ -164,13 +164,13 @@ jobs:
               -p ${{ inputs.service-port }}:${{ inputs.service-port }} \
               --network banking-net \
               -e PORT=${{ inputs.service-port }} \
-              -e API_KEY=$API_KEY \
-              -e JWT_SECRET=$JWT_SECRET \
-              -e ACCOUNTS_URL=$ACCOUNTS_URL \
-              -e TRANSACTIONS_URL=$TRANSACTIONS_URL \
-              -e PAYMENTS_URL=$PAYMENTS_URL \
-              -e CARDS_URL=$CARDS_URL \
-              -e AUTH_URL=$AUTH_URL \
+              -e API_KEY=${{ secrets.API_KEY }} \
+              -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
+              -e ACCOUNTS_URL=${{ secrets.ACCOUNTS_URL }} \
+              -e TRANSACTIONS_URL=${{ secrets.TRANSACTIONS_URL }} \
+              -e PAYMENTS_URL=${{ secrets.PAYMENTS_URL }} \
+              -e CARDS_URL=${{ secrets.CARDS_URL }} \
+              -e AUTH_URL=${{ secrets.AUTH_URL }} \
               ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
 
             echo "✅ ${{ inputs.service-name }} deployed!"

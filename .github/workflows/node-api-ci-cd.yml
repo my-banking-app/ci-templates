@@ -1,0 +1,146 @@
+name: Reusable Node CI/CD
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: 'Display name of the service'
+        required: true
+        type: string
+      docker-image-name:
+        description: 'Docker image name (without registry/user)'
+        required: true
+        type: string
+      service-port:
+        description: 'Port exposed by the service'
+        required: true
+        type: string
+      sonar-project-key:
+        description: 'SonarCloud project key'
+        required: true
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      install-command:
+        description: 'Install dependencies command (npm, pnpm, etc.)'
+        required: false
+        default: 'npm ci'
+        type: string
+      test-command:
+        description: 'Run unit tests with coverage'
+        required: false
+        default: 'npm run test:coverage'
+        type: string
+    secrets:
+      SONAR_TOKEN:           { required: true }
+      DOCKER_USERNAME:       { required: true }
+      DOCKER_PASSWORD:       { required: true }
+      VPS_HOST:              { required: true }
+      VPS_USERNAME:          { required: true }
+      VPS_PRIVATE_KEY:       { required: true }
+      API_KEY:               { required: true }
+      JWT_SECRET:            { required: true }
+
+jobs:
+################################################################################
+# 1) Calidad + cobertura en SonarCloud
+################################################################################
+  analyze:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Simular merge del PR en main
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        run: |
+          echo "🧩 Simulando merge del PR con main para ${{ inputs.service-name }}..."
+          git config --global user.email "ci@github.com"
+          git config --global user.name "CI Bot"
+          git fetch origin main
+          git checkout -b simulated-main origin/main
+          git fetch origin ${{ github.head_ref }}
+          git merge --no-commit --no-ff origin/${{ github.head_ref }} || true
+
+      - name: Setup Node ${{ inputs.node-version }}
+        uses: actions/setup-node@v4
+        with:
+            node-version: ${{ inputs.node-version }}
+
+      - name: Install deps
+        run: ${{ inputs.install-command }}
+
+      - name: Run tests with coverage
+        run: ${{ inputs.test-command }}
+
+      - name: Install SonarScanner CLI (silent)
+        run: |
+          curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.2.4997-linux.zip
+          unzip -qq sonar-scanner.zip
+          sudo mv sonar-scanner-5.0.2.4997-linux /opt/sonar-scanner > /dev/null 2>&1
+          echo "/opt/sonar-scanner/bin" >> $GITHUB_PATH
+
+      - name: Run SonarScanner CLI
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          /opt/sonar-scanner/bin/sonar-scanner \
+            -Dsonar.login=${SONAR_TOKEN}
+
+################################################################################
+# 2) Build imagen y despliegue en el VPS
+################################################################################
+  deploy:
+    name: Deploy → VPS
+    needs: analyze
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    env:
+      API_KEY:      ${{ secrets.API_KEY }}
+      JWT_SECRET:   ${{ secrets.JWT_SECRET }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build & push image
+        run: |
+          echo "🐳 Building ${{ inputs.docker-image-name }}:prod"
+          docker buildx build \
+            --push \
+            --tag ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod .
+
+      - name: Deploy on VPS via SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_PRIVATE_KEY }}
+          script: |
+            echo "🚀 Deploying ${{ inputs.service-name }}..."
+            docker pull ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
+
+            docker stop ${{ inputs.docker-image-name }}-prod || true
+            docker rm   ${{ inputs.docker-image-name }}-prod || true
+
+            docker run -d --restart=unless-stopped --name ${{ inputs.docker-image-name }}-prod \
+              -p ${{ inputs.service-port }}:${{ inputs.service-port }} \
+              --network banking-net \
+              -e PORT=${{ inputs.service-port }} \
+              -e API_KEY=${{ secrets.API_KEY }} \
+              -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
+              ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
+
+            echo "✅ ${{ inputs.service-name }} deployed!"

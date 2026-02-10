@@ -55,6 +55,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Simular merge del PR en main
         if: github.event_name == 'pull_request' && github.base_ref == 'main'
@@ -90,7 +92,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           /opt/sonar-scanner/bin/sonar-scanner \
-            -Dsonar.login=${SONAR_TOKEN}
+            -Dsonar.token=${SONAR_TOKEN}
 
 ################################################################################
 # 2) Build imagen y despliegue en el VPS
@@ -107,6 +109,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: docker/setup-buildx-action@v3
 

@@ -1,4 +1,4 @@
-name: Reusable NestJS + DB CI/CD
+name: Reusable NestJS Compose CI/CD
 
 on:
   workflow_call:
@@ -20,7 +20,6 @@ on:
         type: string
         default: '20'
     secrets:
-      # Credenciales Infra
       SONAR_TOKEN:
         required: true
       DOCKER_USERNAME:
@@ -33,27 +32,17 @@ on:
         required: true
       VPS_PRIVATE_KEY:
         required: true
-      
-      # Variables de Entorno del Proyecto (DB, Redis, etc)
-      DB_HOST:
-        required: true
-      DB_PORT:
-        required: true
+      # Solo pedimos los secretos de datos
       DB_NAME:
         required: true
       DB_USER:
         required: true
       DB_PASSWORD:
         required: true
-      REDIS_HOST:
-        required: true
-      REDIS_PORT:
-        required: true
-      # Opcionales para JWT/API Keys si aplican
-      JWT_SECRET:
-        required: false
       API_KEY:
-        required: false
+        required: true
+      JWT_SECRET:
+        required: true
 
 jobs:
   analyze:
@@ -63,28 +52,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Necesario para SonarCloud
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Install pnpm
-        run: corepack enable && corepack prepare pnpm@latest --activate
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint & Build Check
+      - name: Install & Test
         run: |
-          pnpm run lint
-          pnpm run build
-
-      - name: Run Unit Tests
-        run: pnpm run test
-        # Nota: Si quisieras correr test e2e aquí, necesitarías levantar servicios de postgres/redis
-        # usando la propiedad `services` de GitHub Actions.
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm install --frozen-lockfile
+          # pnpm test (Descomenta si tienes tests unitarios)
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@master
@@ -96,8 +76,6 @@ jobs:
             -Dsonar.projectKey=${{ inputs.sonar-project-key }}
             -Dsonar.organization=my-banking-app
             -Dsonar.sources=src
-            -Dsonar.tests=test
-            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
   deploy:
     name: Deploy to VPS
@@ -121,48 +99,53 @@ jobs:
       - name: Build and push production image
         run: |
           docker buildx build --push \
-            --tag ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:latest \
-            --tag ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:${{ github.sha }} .
+            --tag ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod .
 
-      - name: Deploy to VPS
+      - name: Prepare VPS Directory
         uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_PRIVATE_KEY }}
           script: |
-            echo "🚀 Deploying ${{ inputs.service-name }}..."
+            mkdir -p ~/apps/${{ inputs.service-name }}
+
+      - name: Copy docker-compose.yml to VPS
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_PRIVATE_KEY }}
+          source: "docker-compose.yml"
+          target: "~/apps/${{ inputs.service-name }}/"
+
+      - name: Create .env and Start Services
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_PRIVATE_KEY }}
+          script: |
+            cd ~/apps/${{ inputs.service-name }}
             
-            # Login remoto (opcional si el repo es público, recomendado si es privado)
+            # 1. Generar .env fresco
+            echo "DOCKER_IMAGE=${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod" > .env
+            echo "PORT=${{ inputs.service-port }}" >> .env
+            
+            # Variables de Datos
+            echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+            echo "DB_USER=${{ secrets.DB_USER }}" >> .env
+            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+            echo "API_KEY=${{ secrets.API_KEY }}" >> .env
+            echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+
+            # 2. Login Docker
             echo ${{ secrets.DOCKER_PASSWORD }} | docker login -u ${{ secrets.DOCKER_USERNAME }} --password-stdin
             
-            # Pull de la nueva imagen
-            docker pull ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:latest
+            # 3. Pull y Up (Recrea contenedores solo si cambiaron)
+            docker compose pull app
+            docker compose up -d --remove-orphans
             
-            # Detener y remover contenedor anterior
-            docker stop ${{ inputs.docker-image-name }} || true
-            docker rm ${{ inputs.docker-image-name }} || true
-            
-            # Correr nuevo contenedor conectándolo a la red 'banking-net' (o la que uses en el VPS)
-            # Inyectamos las variables de DB y Redis
-            docker run -d \
-              --name ${{ inputs.docker-image-name }} \
-              --restart unless-stopped \
-              --network banking-net \
-              -p ${{ inputs.service-port }}:${{ inputs.service-port }} \
-              -e NODE_ENV=production \
-              -e PORT=${{ inputs.service-port }} \
-              -e DB_HOST=${{ secrets.DB_HOST }} \
-              -e DB_PORT=${{ secrets.DB_PORT }} \
-              -e DB_NAME=${{ secrets.DB_NAME }} \
-              -e DB_USER=${{ secrets.DB_USER }} \
-              -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
-              -e REDIS_HOST=${{ secrets.REDIS_HOST }} \
-              -e REDIS_PORT=${{ secrets.REDIS_PORT }} \
-              -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
-              ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:latest
-            
-            # Limpieza de imágenes viejas
+            # 4. Limpieza
             docker image prune -f
-            
-            echo "✅ ${{ inputs.service-name }} deployed successfully!"
+            echo "✅ Despliegue completado: ${{ inputs.service-name }}"

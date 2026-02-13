@@ -181,7 +181,7 @@ jobs:
             docker run -d --restart=unless-stopped \
               --name ${{ inputs.docker-image-name }}-prod \
               -p ${{ inputs.service-port }}:${{ inputs.service-port }} \
-              --network proxy \
+              --network eps-network \
               -e NODE_ENV=production \
               -e PORT=${{ inputs.service-port }} \
               -e DATABASE_URL=${{ secrets.DATABASE_URL }} \

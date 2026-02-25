@@ -52,6 +52,14 @@ on:
         required: false
       REDIS_PORT:
         required: false
+      MINIO_ENDPOINT:
+        required: false
+      MINIO_PORT:
+        required: false
+      MINIO_ACCESS_KEY:
+        required: false
+      MINIO_SECRET_KEY:
+        required: false
 
 jobs:
   analyze:
@@ -193,5 +201,9 @@ jobs:
               -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
               -e REDIS_HOST=${{ secrets.REDIS_HOST }} \
               -e REDIS_PORT=${{ secrets.REDIS_PORT }} \
+              -e MINIO_ENDPOINT=${{ secrets.MINIO_ENDPOINT }} \
+              -e MINIO_PORT=${{ secrets.MINIO_PORT }} \
+              -e MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY }} \
+              -e MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY }} \
               ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
             echo "✅ ${{ inputs.service-name }} deployed successfully!"

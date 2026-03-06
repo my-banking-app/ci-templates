@@ -1,0 +1,74 @@
+name: Reusable Python Docker Deploy
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      docker-image-name:
+        required: true
+        type: string
+      service-port:
+        required: true
+        type: string
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_PASSWORD:
+        required: true
+      VPS_HOST:
+        required: true
+      VPS_USERNAME:
+        required: true
+      VPS_PRIVATE_KEY:
+        required: true
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        run: |
+          echo "🐳 Building image..."
+          docker buildx build \
+            --push \
+            --tag ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:latest .
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_PRIVATE_KEY }}
+          script: |
+
+            echo "🚀 Deploying ${{ inputs.service-name }}..."
+
+            docker pull ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:latest
+
+            docker stop ${{ inputs.docker-image-name }} || true
+            docker rm ${{ inputs.docker-image-name }} || true
+
+            docker run -d \
+              --name ${{ inputs.docker-image-name }} \
+              --restart unless-stopped \
+              -p ${{ inputs.service-port }}:${{ inputs.service-port }} \
+              --network eps-network \
+              ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:latest
+
+            echo "✅ Deploy completed"

@@ -60,6 +60,8 @@ on:
         required: false
       MINIO_SECRET_KEY:
         required: false
+      RESEND_API_KEY:
+        required: false      
 
 jobs:
   analyze:
@@ -205,5 +207,6 @@ jobs:
               -e MINIO_PORT=${{ secrets.MINIO_PORT }} \
               -e MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY }} \
               -e MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY }} \
+              -e RESEND_API_KEY=${{ secrets.RESEND_API_KEY }} \
               ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
             echo "✅ ${{ inputs.service-name }} deployed successfully!"

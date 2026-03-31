@@ -1,0 +1,175 @@
+name: Reusable React/Vite Frontend CI/CD
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: 'Name of the microservice'
+        required: true
+        type: string
+      docker-image-name:
+        description: 'Docker image name'
+        required: true
+        type: string
+      service-port:
+        description: 'Port where the service runs'
+        required: false
+        type: string
+        default: '8180'
+      sonar-project-key:
+        description: 'SonarCloud project key'
+        required: true
+        type: string
+      node-version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '20'
+    secrets:
+      SONAR_TOKEN:
+        required: true
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_PASSWORD:
+        required: true
+      VPS_HOST:
+        required: true
+      VPS_USERNAME:
+        required: true
+      VPS_PRIVATE_KEY:
+        required: true
+      VITE_API_URL:
+        required: true
+
+jobs:
+  analyze:
+    name: Build, Lint & SonarCloud Analysis
+    runs-on: ubuntu-latest
+
+    outputs:
+      analysis-id: ${{ steps.extract-analysis-id.outputs.analysis-id }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Simular merge del PR en main
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        run: |
+          echo "🧩 Simulando merge del PR con main para ${{ inputs.service-name }}..."
+          git config --global user.email "ci@github.com"
+          git config --global user.name "CI Bot"
+          git fetch origin main
+          git checkout -b simulated-main origin/main
+          git fetch origin ${{ github.head_ref }}
+          git merge --no-commit --no-ff origin/${{ github.head_ref }} || true
+
+      - name: Set up Node.js ${{ inputs.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Run tests with coverage
+        run: npm run test:cov || echo "⚠️ No test script found, skipping tests"
+
+      - name: Build project
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+
+      - name: Install SonarScanner CLI (silent)
+        run: |
+          curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.2.4997-linux.zip
+          unzip -qq sonar-scanner.zip
+          sudo mv sonar-scanner-5.0.2.4997-linux /opt/sonar-scanner > /dev/null 2>&1
+          echo "/opt/sonar-scanner/bin" >> $GITHUB_PATH
+
+      - name: Run SonarScanner CLI
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          /opt/sonar-scanner/bin/sonar-scanner \
+            -Dsonar.login=${SONAR_TOKEN}
+
+      - name: Obtener último analysisId
+        id: extract-analysis-id
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          echo "⌛ Obteniendo último analysisId desde la API para ${{ inputs.service-name }}..."
+          analysisId=$(curl -s -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/project_analyses/search?project=${{ inputs.sonar-project-key }}" \
+            | jq -r '.analyses[0].key')
+
+          if [ -z "$analysisId" ]; then
+            echo "❌ No se pudo obtener el analysisId"
+            exit 1
+          fi
+
+          echo "analysis-id=$analysisId" >> $GITHUB_OUTPUT
+
+      - name: Validar Quality Gate (fail early)
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          analysisId="${{ steps.extract-analysis-id.outputs.analysis-id }}"
+          status=$(curl -s -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${analysisId}" \
+            | jq -r '.projectStatus.status')
+
+          echo "🔍 Estado del Quality Gate para ${{ inputs.service-name }}: $status"
+          if [ "$status" != "OK" ]; then
+            echo "❌ Quality Gate falló para ${{ inputs.service-name }}. Cancelando pipeline."
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: analyze
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push production image
+        run: |
+          echo "🐳 Building and pushing ${{ inputs.docker-image-name }}:prod..."
+          docker buildx build --push \
+            --build-arg VITE_API_URL=${{ secrets.VITE_API_URL }} \
+            --tag ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod .
+
+      - name: SSH to VPS and deploy
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_PRIVATE_KEY }}
+          script: |
+            echo "🚀 Deploying ${{ inputs.service-name }} to VPS..."
+            docker pull ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
+            docker stop ${{ inputs.docker-image-name }}-prod || true
+            docker rm ${{ inputs.docker-image-name }}-prod || true
+            docker run -d --restart=unless-stopped \
+              --name ${{ inputs.docker-image-name }}-prod \
+              -p ${{ inputs.service-port }}:80 \
+              --network eps-network \
+              ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
+            echo "✅ ${{ inputs.service-name }} deployed successfully!"

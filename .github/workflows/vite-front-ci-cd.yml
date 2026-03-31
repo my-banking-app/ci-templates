@@ -169,7 +169,7 @@ jobs:
             docker rm ${{ inputs.docker-image-name }}-prod || true
             docker run -d --restart=unless-stopped \
               --name ${{ inputs.docker-image-name }}-prod \
-              -p ${{ inputs.service-port }}:80 \
+              -p ${{ inputs.service-port }}:4173 \
               --network eps-network \
               ${{ secrets.DOCKER_USERNAME }}/${{ inputs.docker-image-name }}:prod
             echo "✅ ${{ inputs.service-name }} deployed successfully!"

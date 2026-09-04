@@ -51,6 +51,16 @@ on:
         required: false
         type: string
         default: 'mvn -B clean verify'
+      frontend-config-s3-bucket:
+        description: 'Si se indica, tras el deploy escribe config.json (con la URL pública actual) en este bucket S3 del frontend'
+        required: false
+        type: string
+        default: ''
+      api-port:
+        description: 'Puerto público del API (para construir la URL en config.json)'
+        required: false
+        type: string
+        default: '8080'
     secrets:
       SONAR_TOKEN:
         required: true
@@ -201,6 +211,35 @@ jobs:
           service: ${{ inputs.ecs-service }}
           cluster: ${{ inputs.ecs-cluster }}
           wait-for-service-stability: true
+
+      - name: Publish runtime config.json to frontend bucket
+        if: inputs.frontend-config-s3-bucket != ''
+        env:
+          CLUSTER: ${{ inputs.ecs-cluster }}
+          SERVICE: ${{ inputs.ecs-service }}
+          BUCKET: ${{ inputs.frontend-config-s3-bucket }}
+          PORT: ${{ inputs.api-port }}
+        run: |
+          echo "🔎 Obteniendo IP pública de la tarea en ejecución..."
+          for i in $(seq 1 20); do
+            TASK=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" --desired-status RUNNING --query 'taskArns[0]' --output text)
+            if [ "$TASK" != "None" ] && [ -n "$TASK" ]; then
+              ENI=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+                --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text)
+              IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$ENI" \
+                --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+              if [ -n "$IP" ] && [ "$IP" != "None" ]; then break; fi
+            fi
+            echo "  esperando tarea RUNNING con IP... ($i)"; sleep 15
+          done
+          if [ -z "$IP" ] || [ "$IP" = "None" ]; then
+            echo "❌ No se pudo obtener la IP pública de la tarea"; exit 1
+          fi
+          echo "{\"apiUrl\":\"http://$IP:$PORT\"}" > config.json
+          echo "📝 config.json => $(cat config.json)"
+          aws s3 cp config.json "s3://$BUCKET/config.json" \
+            --cache-control "no-cache" --content-type "application/json"
+          echo "✅ config.json publicado en s3://$BUCKET/config.json"
 
       - name: Deploy summary
         run: echo "✅ ${{ inputs.service-name }} desplegado en ECS (${{ inputs.ecs-cluster }}/${{ inputs.ecs-service }})."

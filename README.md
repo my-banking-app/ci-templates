@@ -5,7 +5,7 @@ banco. Cada repo consumidor invoca uno de estos workflows y obtiene CI (build + 
 SonarCloud + Quality Gate) y CD hacia el destino correspondiente.
 
 > Versionado por tags. Referencia siempre una versión fija, p. ej.
-> `uses: my-banking-app/ci-templates/.github/workflows/aws-java-ecs-ci-cd.yml@v1.3.1`.
+> `uses: my-banking-app/ci-templates/.github/workflows/aws-java-ecs-ci-cd.yml@v1.3.2`.
 
 ## Workflows disponibles
 
@@ -91,7 +91,7 @@ permissions:
   contents: read
 jobs:
   ci-cd:
-    uses: my-banking-app/ci-templates/.github/workflows/aws-java-ecs-ci-cd.yml@v1.3.1
+    uses: my-banking-app/ci-templates/.github/workflows/aws-java-ecs-ci-cd.yml@v1.3.2
     with:
       service-name: code-insight-ai-api
       ecr-repository: code-insight-ai-api

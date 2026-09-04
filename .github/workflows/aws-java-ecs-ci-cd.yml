@@ -57,6 +57,9 @@ on:
       AWS_ROLE_ARN:
         description: 'ARN del rol IAM que GitHub asume vía OIDC'
         required: true
+      DB_PASSWORD:
+        description: 'Contraseña de la BD; se inyecta como env var en el task definition al desplegar'
+        required: false
 
 permissions:
   id-token: write   # requerido para OIDC
@@ -188,6 +191,8 @@ jobs:
           task-definition: ${{ inputs.ecs-task-definition }}
           container-name: ${{ inputs.container-name }}
           image: ${{ steps.build-image.outputs.image }}
+          environment-variables: |
+            SPRING_DATASOURCE_PASSWORD=${{ secrets.DB_PASSWORD }}
 
       - name: Deploy to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2

@@ -147,7 +147,7 @@ jobs:
       - name: Sync bundle to S3
         run: |
           echo "🚀 Subiendo ${{ inputs.dist-path }} a s3://${{ inputs.s3-bucket }}"
-          aws s3 sync "${{ inputs.dist-path }}" "s3://${{ inputs.s3-bucket }}" --delete
+          aws s3 sync "${{ inputs.dist-path }}" "s3://${{ inputs.s3-bucket }}" --delete --exclude "config.json"
 
       - name: Invalidate CloudFront cache
         if: inputs.cloudfront-distribution-id != ''

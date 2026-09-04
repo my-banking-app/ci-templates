@@ -82,8 +82,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    outputs:
-      analysis-id: ${{ steps.extract-analysis-id.outputs.analysis-id }}
 
     steps:
       - name: Checkout code
@@ -112,43 +110,14 @@ jobs:
       - name: Build & test with Maven (genera Jacoco)
         run: ${{ inputs.maven-command }}
 
-      - name: SonarCloud Scan
+      - name: SonarCloud Scan & Quality Gate
         uses: SonarSource/sonarqube-scan-action@v5
+        with:
+          args: >
+            -Dsonar.qualitygate.wait=true
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
-
-      - name: Obtener último analysisId
-        id: extract-analysis-id
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          echo "⌛ Obteniendo último analysisId para ${{ inputs.service-name }}..."
-          analysisId=$(curl -s -u "${SONAR_TOKEN}:" \
-            "https://sonarcloud.io/api/project_analyses/search?project=${{ inputs.sonar-project-key }}" \
-            | jq -r '.analyses[0].key')
-
-          if [ -z "$analysisId" ] || [ "$analysisId" = "null" ]; then
-            echo "❌ No se pudo obtener el analysisId"
-            exit 1
-          fi
-
-          echo "analysis-id=$analysisId" >> $GITHUB_OUTPUT
-
-      - name: Validar Quality Gate (fail early)
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          analysisId="${{ steps.extract-analysis-id.outputs.analysis-id }}"
-          status=$(curl -s -u "${SONAR_TOKEN}:" \
-            "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${analysisId}" \
-            | jq -r '.projectStatus.status')
-
-          echo "🔍 Quality Gate para ${{ inputs.service-name }}: $status"
-          if [ "$status" != "OK" ]; then
-            echo "❌ Quality Gate falló para ${{ inputs.service-name }}. Cancelando pipeline."
-            exit 1
-          fi
 
   deploy:
     name: Deploy to ECS Fargate

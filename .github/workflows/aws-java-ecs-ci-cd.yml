@@ -70,6 +70,12 @@ on:
       DB_PASSWORD:
         description: 'Contraseña de la BD; se inyecta como env var en el task definition al desplegar'
         required: false
+      OPENAI_API_KEY:
+        description: 'API key de OpenAI (opcional); se inyecta como env var en el task definition. Sin ella, la app cae al modo heurístico'
+        required: false
+      GITHUB_TOKEN_FOR_ANALYSIS:
+        description: 'Token de GitHub (opcional) para subir el límite de la API pública usada en el análisis (60 -> 5000 req/hora)'
+        required: false
 
 permissions:
   id-token: write   # requerido para OIDC
@@ -164,6 +170,8 @@ jobs:
           image: ${{ steps.build-image.outputs.image }}
           environment-variables: |
             SPRING_DATASOURCE_PASSWORD=${{ secrets.DB_PASSWORD }}
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN_FOR_ANALYSIS }}
 
       - name: Deploy to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2

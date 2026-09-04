@@ -1,0 +1,201 @@
+name: Reusable AWS Java (ECS Fargate) CI/CD
+
+# Reutilizable: prueba una API Java/Spring Boot con SonarCloud y la despliega en
+# Amazon ECS Fargate (imagen en Amazon ECR). Autenticación con AWS vía OIDC
+# (rol IAM temporal, sin claves de larga vida).
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: 'Nombre legible del servicio'
+        required: true
+        type: string
+      ecr-repository:
+        description: 'Nombre del repositorio en Amazon ECR'
+        required: true
+        type: string
+      ecs-cluster:
+        description: 'Nombre del cluster de ECS'
+        required: true
+        type: string
+      ecs-service:
+        description: 'Nombre del servicio de ECS'
+        required: true
+        type: string
+      ecs-task-definition:
+        description: 'Ruta del task-definition.json dentro del repo'
+        required: false
+        type: string
+        default: 'task-definition.json'
+      container-name:
+        description: 'Nombre del contenedor dentro del task definition'
+        required: true
+        type: string
+      aws-region:
+        description: 'Región de AWS'
+        required: false
+        type: string
+        default: 'us-east-1'
+      java-version:
+        description: 'Versión de Java'
+        required: false
+        type: string
+        default: '21'
+      sonar-project-key:
+        description: 'Project key de SonarCloud'
+        required: true
+        type: string
+      maven-command:
+        description: 'Comando Maven para compilar y probar'
+        required: false
+        type: string
+        default: 'mvn -B clean verify'
+    secrets:
+      SONAR_TOKEN:
+        required: true
+      AWS_ROLE_ARN:
+        description: 'ARN del rol IAM que GitHub asume vía OIDC'
+        required: true
+
+permissions:
+  id-token: write   # requerido para OIDC
+  contents: read
+
+jobs:
+  analyze:
+    name: Build, Test & SonarCloud Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      analysis-id: ${{ steps.extract-analysis-id.outputs.analysis-id }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Simular merge del PR en main
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        run: |
+          echo "🧩 Simulando merge del PR con main para ${{ inputs.service-name }}..."
+          git config --global user.email "ci@github.com"
+          git config --global user.name "CI Bot"
+          git fetch origin main
+          git checkout -b simulated-main origin/main
+          git fetch origin ${{ github.head_ref }}
+          git merge --no-commit --no-ff origin/${{ github.head_ref }} || true
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build & test with Maven (genera Jacoco)
+        run: ${{ inputs.maven-command }}
+
+      - name: Install SonarScanner CLI (silent)
+        run: |
+          curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.2.4997-linux.zip
+          unzip -qq sonar-scanner.zip
+          sudo mv sonar-scanner-5.0.2.4997-linux /opt/sonar-scanner > /dev/null 2>&1
+          echo "/opt/sonar-scanner/bin" >> $GITHUB_PATH
+
+      - name: Run SonarScanner CLI
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          /opt/sonar-scanner/bin/sonar-scanner \
+            -Dsonar.login=${SONAR_TOKEN}
+
+      - name: Obtener último analysisId
+        id: extract-analysis-id
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          echo "⌛ Obteniendo último analysisId para ${{ inputs.service-name }}..."
+          analysisId=$(curl -s -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/project_analyses/search?project=${{ inputs.sonar-project-key }}" \
+            | jq -r '.analyses[0].key')
+
+          if [ -z "$analysisId" ] || [ "$analysisId" = "null" ]; then
+            echo "❌ No se pudo obtener el analysisId"
+            exit 1
+          fi
+
+          echo "analysis-id=$analysisId" >> $GITHUB_OUTPUT
+
+      - name: Validar Quality Gate (fail early)
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          analysisId="${{ steps.extract-analysis-id.outputs.analysis-id }}"
+          status=$(curl -s -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${analysisId}" \
+            | jq -r '.projectStatus.status')
+
+          echo "🔍 Quality Gate para ${{ inputs.service-name }}: $status"
+          if [ "$status" != "OK" ]; then
+            echo "❌ Quality Gate falló para ${{ inputs.service-name }}. Cancelando pipeline."
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy to ECS Fargate
+    runs-on: ubuntu-latest
+    needs: analyze
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag & push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.ecr-repository }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "🐳 Building ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Render Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ inputs.ecs-task-definition }}
+          container-name: ${{ inputs.container-name }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ inputs.ecs-service }}
+          cluster: ${{ inputs.ecs-cluster }}
+          wait-for-service-stability: true
+
+      - name: Deploy summary
+        run: echo "✅ ${{ inputs.service-name }} desplegado en ECS (${{ inputs.ecs-cluster }}/${{ inputs.ecs-service }})."

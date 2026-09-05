@@ -73,7 +73,7 @@ on:
       OPENAI_API_KEY:
         description: 'API key de OpenAI (opcional); se inyecta como env var en el task definition. Sin ella, la app cae al modo heurístico'
         required: false
-      GITHUB_TOKEN_FOR_ANALYSIS:
+      GH_ANALYSIS_TOKEN:
         description: 'Token de GitHub (opcional) para subir el límite de la API pública usada en el análisis (60 -> 5000 req/hora)'
         required: false
 
@@ -171,7 +171,7 @@ jobs:
           environment-variables: |
             SPRING_DATASOURCE_PASSWORD=${{ secrets.DB_PASSWORD }}
             OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-            GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN_FOR_ANALYSIS }}
+            GITHUB_TOKEN=${{ secrets.GH_ANALYSIS_TOKEN }}
 
       - name: Deploy to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
